@@ -1,0 +1,131 @@
+name: Download via Services
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'YouTube URL'
+        required: true
+        type: string
+      download_type:
+        description: 'Download Type'
+        required: true
+        type: choice
+        options:
+          - video-1080p
+          - video-720p
+          - video-480p
+          - video-360p
+          - audio-mp3-320k
+          - audio-mp3-192k
+          - audio-m4a
+          - audio-opus
+        default: 'video-720p'
+      subtitles:
+        description: 'Include Subtitles'
+        type: boolean
+        default: false
+      subtitle_lang:
+        description: 'Subtitle Language'
+        required: false
+        type: choice
+        options:
+          - en
+          - es
+          - fr
+          - de
+          - it
+          - pt
+          - ru
+          - ja
+          - ko
+          - zh
+        default: 'en'
+      embed_subs:
+        description: 'Embed Subtitles in Video'
+        type: boolean
+        default: false
+      thumbnail:
+        description: 'Download Thumbnail'
+        type: boolean
+        default: false
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Setup Environment
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq ffmpeg curl wget p7zip-full p7zip-rar
+        
+    - name: Install Python Dependencies
+      run: |
+        pip install yt-dlp requests cloudscraper --quiet
+        
+    - name: Create Directories
+      run: |
+        mkdir -p downloads/videos
+        mkdir -p downloads/audio
+        mkdir -p downloads/subtitles
+        mkdir -p downloads/thumbnails
+        mkdir -p split_files
+        
+    - name: Download YouTube Content
+      env:
+        YOUTUBE_URL: ${{ github.event.inputs.url }}
+        DOWNLOAD_TYPE: ${{ github.event.inputs.download_type }}
+        SUBTITLES: ${{ github.event.inputs.subtitles }}
+        SUB_LANG: ${{ github.event.inputs.subtitle_lang }}
+        EMBED_SUBS: ${{ github.event.inputs.embed_subs }}
+        THUMBNAIL: ${{ github.event.inputs.thumbnail }}
+      run: |
+        python download_fixed.py
+        
+    - name: Auto-Split Large Files (90MB)
+      run: |
+        python auto_split_90mb.py
+        
+    - name: Create Zip Archives
+      run: |
+        python create_zip_files.py
+        
+    - name: Generate Summary
+      run: |
+        python create_summary.py
+        
+    - name: Commit and Push Files
+      run: |
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        
+        git add downloads/ split_files/ summary.md 2>/dev/null || true
+        
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Download: $(date +'%Y-%m-%d %H:%M') [${{ github.event.inputs.download_type }}]"
+          git push
+          echo "Pushed to repository!"
+        fi
+        
+    - name: Upload Artifact (Backup)
+      uses: actions/upload-artifact@v4
+      with:
+        name: download-${{ github.run_id }}
+        path: |
+          downloads/**/*
+          split_files/**/*
+        retention-days: 3
